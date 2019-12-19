@@ -1,5 +1,6 @@
 storedAccounts.json
 apiSecrets.json
+storedComments.json
 
 # Logs
 logs
