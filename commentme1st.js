@@ -86,7 +86,15 @@ function handleCommand(command) {
     break;
 
     case "refresh":
-      rl.question("#\n#  Account number > ", refreshAccount);
+      rl.question("#\n#  Account number > ", (answer) => {
+        if (answer.trim() == "all") {
+          for (var i = 0; i < storedAccounts.length; i++) {
+            refreshAccount(i+1);
+          }
+        }else{
+          refreshAccount(parseInt(answer.trim()));
+        }
+      });
       break;
 
     case "start":
@@ -262,7 +270,7 @@ function startWatching(playlistId, fetchedVideos) {
   }, listDelay);
 }
 
-function watching(channelId, fetchedVideos) {
+function watching(playlistId, fetchedVideos) {
   var newVideos = [];
 
   fetchedVideos.forEach(element => {
