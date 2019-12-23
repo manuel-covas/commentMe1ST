@@ -35,8 +35,12 @@ const ACCOUNTS_FILENAME = "storedAccounts.json";
 const COMMENTS_FILENAME = "storedComments.json";
 var SIGN_IN_URL = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&redirect_uri=urn:ietf:wg:oauth:2.0:oob&scope=https://www.googleapis.com/auth/youtube.force-ssl&access_type=offline&prompt=consent";
 var BASE_CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels?part=contentDetails";
-var BASE_PLAYLIST_URL = "https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=5";
+var BASE_PLAYLIST_URL = "https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=50";
+var BASE_VIDEOS_PAGE_URL = "https://www.youtube.com/channel/"
+var HTML_MATCHING_PATTERN = "href=\"/watch?v=";
+var HTML_MATCH_END_CHAR = "\""
 
+var fromHTML = false;
 var channelId = "";
 var uploadsPlaylistId = "";
 var listDelay = -1;
@@ -90,9 +94,16 @@ function handleCommand(command) {
         listDelay = parseInt(answer.trim());
         rl.question("#  Target Channel ID > ", (answer) => {
           channelId = answer.trim();
-          getUploadsPlaylist(() => {
-            getVideos(uploadsPlaylistId, startWatching, true);
-          });
+          rl.question("#  Use API? (y/n) > ", (answer) => {
+            if (answer.trim() == "y") {
+              getUploadsPlaylist(() => {
+                getVideos(uploadsPlaylistId, startWatching, true);
+              });
+            }else{
+              fromHTML = true;
+              getVideosFromHTML(channelId, startWatching, true);
+            }
+          })
         });
       });
       break;
@@ -114,7 +125,7 @@ function exchangeOAuthCode(oAuthCode) {
     console.log("#  Got: "+res.statusCode+" "+res.statusMessage);
 
     res.on("data", (d) => {
-      responseData.push(d);
+      responseData += d;
     });
     res.on("end", () => {
       if (res.statusCode != 200) {
@@ -167,7 +178,7 @@ function refreshAccount(index) {
       return;
     }
     res.on("data", (d) => {
-      responseData.push(d);
+      responseData += d;
     });
     res.on("end", () => {
       storeNewToken(index, responseData);
@@ -213,7 +224,7 @@ function getUploadsPlaylist(callback) {
     }
     
     res.on("data", (d) => {
-      responseData.push(d);
+      responseData += d;
     });
 
     res.on("end", () => {
@@ -243,7 +254,11 @@ function startWatching(playlistId, fetchedVideos) {
 
   setTimeout(() => {
     console.log("#  Fetching...");
-    getVideos(playlistId, watching, false);
+    if (fromHTML) {
+      getVideosFromHTML(playlistId, watching, false);
+    }else{
+      getVideos(playlistId, watching, false);
+    }
   }, listDelay);
 }
 
@@ -262,7 +277,11 @@ function watching(channelId, fetchedVideos) {
     console.log("#  Waiting "+listDelay+"ms...");
     setTimeout(() => {
       console.log("#  Fetching...");
-      getVideos(channelId, watching, false);
+      if (fromHTML) {
+        getVideosFromHTML(channelId, watching, false);
+      }else{
+        getVideos(playlistId, watching, false);
+      }
     }, listDelay);
   }else{
     console.log("#  Found new video! ("+newVideos.length+")\n#");
@@ -275,7 +294,11 @@ function watching(channelId, fetchedVideos) {
     });
     
     console.log("#  Done commenting.\n#")
-    getVideos(channelId, startWatching, true);
+    if (fromHTML) {
+      getVideosFromHTML(channelId, watching, false);
+    }else{
+      getVideos(playlistId, watching, false);
+    }
   }
 }
 
@@ -289,7 +312,7 @@ function comment(videoId, account, commentIndex) {
     console.log("#  "+account.name+" "+res.statusCode+" "+res.statusMessage);
 
     res.on("data", (d) => {
-      responseData.push(d);
+      responseData += d;
     });
     res.on("end", () => {
       if (res.statusCode != 200) {
@@ -321,6 +344,7 @@ function comment(videoId, account, commentIndex) {
 }
 
 
+
 function getVideos(playlistId, callback, logAll) {
   var playlistGetUrl = BASE_PLAYLIST_URL.concat("&playlistId="+playlistId);
 
@@ -336,10 +360,21 @@ function getVideos(playlistId, callback, logAll) {
       return;
     }
     res.on("data", (d) => {
-      responseData.push(d);
+      responseData += d;
     });
-    res.on("end", () => {
-      var response = JSON.parse(responseData);
+    res.on("end", () =>
+    {
+      var response;
+      try {
+        response = JSON.parse(responseData);
+      }
+      catch (e) {
+        console.log("#  Error parsing response: "+e.message+"\n#");
+        console.log(responseData+"\n#");
+        rl.prompt();
+        return;
+      }
+
       response.items.forEach(element => {
         videoIds.push(element.contentDetails.videoId);
         videoDates.push(element.contentDetails.videoPublishedAt);
@@ -365,6 +400,70 @@ function getVideos(playlistId, callback, logAll) {
   req.end();
 }
 
+function getVideosFromHTML(channelId, callback, logAll) {
+  var webpageUrl = BASE_VIDEOS_PAGE_URL.concat(channelId, "/videos");
+  var videoIds = [];
+  var responseData = [];
+
+  var req = https.get(webpageUrl, (res) => {
+    if (logAll) { console.log("#\n#  Listed: "+res.statusCode+" "+res.statusMessage); }
+    if (res.statusCode != 200) {
+      console.log("#\n#  Failed to list videos!");
+      console.log("#    "+res.statusCode+" "+res.statusMessage+"\n#");
+      rl.prompt();
+      return;
+    }
+    res.on("data", (d) => {
+      responseData += d;
+    });
+    res.on("end", () => {
+      var currentMatch = [];
+      var matchingIndex = 0;
+      var matchingPattern = HTML_MATCHING_PATTERN;
+      responseData = Array.from(responseData);
+      responseData.forEach((element) =>
+      {
+        if (matchingIndex != matchingPattern.length) {
+          if (element == matchingPattern[matchingIndex]) {
+            matchingIndex++;
+          }else{
+            matchingIndex = 0;
+          }
+        }else{
+          if (element != HTML_MATCH_END_CHAR) {
+            currentMatch.push(element);
+          }else{
+            currentMatch = currentMatch.join("");
+            if (!videoIds.includes(currentMatch)) {
+              videoIds.push(currentMatch);
+            }
+            currentMatch = [];
+            matchingIndex = 0;
+          }
+        }
+      });
+      
+      if (logAll) {
+        console.log("#  Got "+videoIds.length+" latest uploads:\n#");
+        videoIds.forEach((element) => {
+          console.log("#    - "+element);
+        });
+        console.log("#");
+      }
+      
+      callback(channelId, videoIds);
+    });
+  });
+  req.on("error", (e) => {
+    console.log("#  Failed to search for videos!");
+    console.log("#  "+e+"\n#");
+    rl.prompt();
+  });
+  
+  req.end();
+}
+
+
 function loadSecrets() {
   if (!fs.existsSync(API_SECRETS_FILENAME)) {
     console.log("Initializing inexisting api secrets storage.");
@@ -378,7 +477,6 @@ function loadSecrets() {
     console.log("Loaded api secrets.");
   }
 }
-
 
 function loadAccounts() {
   if (!fs.existsSync(ACCOUNTS_FILENAME))
@@ -408,7 +506,6 @@ function listLoadedAccounts() {
   }
 }
 
-
 function loadComments() {
   if (!fs.existsSync(COMMENTS_FILENAME))
   {
@@ -428,12 +525,4 @@ function listComments() {
     console.log("#   #"+(index+1)+" - "+element);
   });
   console.log("#");
-}
-
-
-
-function getRandomIntInclusive(min, max) {
-  min = Math.ceil(min);
-  max = Math.floor(max);
-  return Math.floor(Math.random() * (max - min + 1)) + min;
 }

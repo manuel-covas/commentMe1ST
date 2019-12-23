@@ -1,6 +1,7 @@
 storedAccounts.json
 apiSecrets.json
 storedComments.json
+.vscode
 
 # Logs
 logs
